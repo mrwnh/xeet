@@ -121,7 +121,11 @@ pub fn one_line(
             max_lines: Some(1),
             wrap,
             preserve: false,
-            dir: Dir::Auto,
+            // X gives the name, handle and timestamp no `dir`, so they take the
+            // page's `ltr`. Under `dir=auto` a right-to-left name lines up
+            // against the right edge of its box, which is unbounded when the
+            // name is measured.
+            dir: Dir::Ltr,
             tab_size: 4.0,
         },
     )

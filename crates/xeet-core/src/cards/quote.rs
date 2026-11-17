@@ -30,8 +30,8 @@
 //! cells carry `padding-bottom: 66%`.
 
 use super::{
-    body_block, media, outline, paragraph, push_text, rounded, shape, shift, Ctx, Item, Rect, BODY,
-    SUBTEXT1,
+    body_block, media, names, outline, paragraph, push_text, rounded, shape, shift, Ctx, Item,
+    Rect, BODY, SUBTEXT1,
 };
 use crate::display::{CornerShape, ImageRef};
 use crate::model::{self, Verified};
@@ -296,7 +296,7 @@ fn header(
     tail += GAP;
     tail += GAP + ceil64(dot_probe.width) + GAP + ceil64(stamp_block.width);
     let name_cap = (avail(x) - tail).max(0.0);
-    let natural = paragraph(
+    let natural = names(
         cx,
         post.author.name.trim(),
         BODY,
@@ -305,7 +305,7 @@ fn header(
         f32::MAX,
         Some(1),
     );
-    let name = paragraph(
+    let name = names(
         cx,
         post.author.name.trim(),
         BODY,

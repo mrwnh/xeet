@@ -484,6 +484,35 @@ pub(crate) fn paragraph_wrapped(
     inline::layout(&[span], &st)
 }
 
+/// Account names: a quote's header, a video's "From" credit, the tag line
+/// under media. X gives these boxes no `dir`, so they take the page's `ltr`:
+/// a right-to-left name starts at the box's left edge, before its badge, and
+/// "A and 6 others" keeps its English order.
+pub(crate) fn names(
+    cx: &Ctx,
+    text: &str,
+    size: (f32, f32),
+    weight: u16,
+    color: Rgba,
+    width: f32,
+    max_lines: Option<usize>,
+) -> TextBlock {
+    let (size, line_height) = cx.ty(size);
+    let span = Span::new(text, color, weight);
+    let st = BlockStyle {
+        size,
+        line_height,
+        weight,
+        width,
+        max_lines,
+        wrap: Wrap::Anywhere,
+        preserve: true,
+        dir: Dir::Ltr,
+        tab_size: 4.0,
+    };
+    inline::layout(&[span], &st)
+}
+
 /// Lays out the rules stream's body spans: one [`Span`] per run, with entities
 /// in the brand color, exactly as the frame draws a post's own text.
 pub(crate) fn body_block(

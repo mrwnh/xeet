@@ -504,7 +504,7 @@ pub(crate) fn tag_line(cx: &Ctx, tags: &[String], y0: f32, out: &mut Vec<Item>) 
     let Some(label) = tag_label(tags) else {
         return 0.0;
     };
-    let block = super::paragraph(cx, &label, SUBTEXT2, 400, cx.p.secondary, cx.width, None);
+    let block = super::names(cx, &label, SUBTEXT2, 400, cx.p.secondary, cx.width, None);
     push_text(out, &block, 0.0, y0, cx.width);
     block.height
 }
@@ -1081,7 +1081,7 @@ impl Attr {
         };
         let room =
             (budget - AVATAR - GAP_1 - if icon.is_some() { GAP_1 + AVATAR } else { 0.0 }).max(1.0);
-        let natural = super::paragraph(
+        let natural = super::names(
             cx,
             &src.name,
             SUBTEXT2,
@@ -1092,7 +1092,7 @@ impl Attr {
         );
         let clamped = natural.width > room + 0.001;
         let name = if clamped {
-            super::paragraph(cx, &src.name, SUBTEXT2, 400, cx.p.on_color, room, Some(1))
+            super::names(cx, &src.name, SUBTEXT2, 400, cx.p.on_color, room, Some(1))
         } else {
             natural
         };
