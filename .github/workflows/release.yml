@@ -52,9 +52,10 @@ jobs:
   verify:
     name: Verify tag & gates
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 35
     permissions:
       contents: read
+      statuses: read # Read the tagged commit's `Vercel CI` status
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -72,6 +73,44 @@ jobs:
             exit 1
           fi
           echo "Verified $GITHUB_SHA is on main ($STATUS)"
+
+      # The test suite runs in Vercel CI on every push to main (`turbo.json`, the
+      # `ci` tasks), not here. A release only goes out for a commit it passed on.
+      # v0.1.1 shipped from a commit Vercel CI never ran on, and nothing noticed.
+      - name: Require a green Vercel CI run for the tagged commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          deadline=$(( $(date +%s) + 25 * 60 ))
+          last=""
+          while :; do
+            STATE=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/status" \
+              --jq '[.statuses[] | select(.context == "Vercel CI")][0] | if . then "\(.state)|\(.description // "")" else "missing|" end')
+            state="${STATE%%|*}"
+            description="${STATE#*|}"
+            if [ "$state" != "$last" ]; then
+              echo "Vercel CI on ${GITHUB_SHA}: ${state}${description:+ (${description})}"
+              last="$state"
+            fi
+            case "$state" in
+              success)
+                exit 0
+                ;;
+              failure|error)
+                echo "::error::Vercel CI ${state} on ${GITHUB_SHA}${description:+: ${description}}. Fix main and tag a commit CI passed on."
+                exit 1
+                ;;
+            esac
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              if [ "$state" = "missing" ]; then
+                echo "::error::Vercel CI never reported on ${GITHUB_SHA}. Check \`vercel ci list\`; once it has run and passed, re-run this workflow."
+              else
+                echo "::error::Vercel CI is still ${state} on ${GITHUB_SHA} after 25 minutes. Re-run this workflow once it passes."
+              fi
+              exit 1
+            fi
+            sleep 20
+          done
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

@@ -24,7 +24,7 @@ why they skipped instead of failing.
 | Pipeline | When | Does | Time |
 |---|---|---|---|
 | Vercel CI (`turbo.json`) | push to `main` | `ci:gates` (contract, `#![forbid(unsafe_code)]`, golden stamps, release-gate tests, `actionlint`), `ci:rust-test` on 8 vCPU Ubuntu (fmt, clippy, workspace tests, stored Chrome layout & raster parity), `ci:wasm` + `ci:pkg-test` | ~1–2 minutes |
-| `release.yml` | `v*` tag on `main` | ancestry & version verification, 6-platform self-contained Rust binaries, WASM build, 6-way cross-OS + WASM PNG determinism check, GitHub Artifact Attestations, draft GitHub Release, npm OIDC Trusted Publishing in two phases (below), install-from-npm check, GitHub Release published | ~15 minutes when npm's scan is quick |
+| `release.yml` | `v*` tag on `main` | ancestry & version verification, a green `Vercel CI` status on the tagged commit (waits up to 25 minutes), 6-platform self-contained Rust binaries, WASM build, 6-way cross-OS + WASM PNG determinism check, GitHub Artifact Attestations, draft GitHub Release, npm OIDC Trusted Publishing in two phases (below), install-from-npm check, GitHub Release published | ~15 minutes when npm's scan is quick |
 | `upstream-watch.yml` (pipeline 2) | every 6h (`17 */6 * * *`) | logged-out probe of live x.com stylesheet & SSR invariants; opens deduplicated alarm issue or dispatches `sync.yml` | seconds |
 | `sync.yml` (pipeline 3) | from watch, or by hand | snapshot to the private store, regenerate tokens, fingerprint, gates, then **either** a signed token-port PR **or** a repair-brief issue | 10–20 minutes |
 
