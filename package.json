@@ -24,7 +24,7 @@
     "ci:wasm": "node tools/ship/vercel-build.mjs --only wasm",
     "ci:pkg-test": "node tools/ship/vercel-build.mjs --only pkg-test",
     "ci:site": "node tools/ship/vercel-build.mjs --only site",
-    "test": "node tools/ship/check-contract.mjs && node tools/ship/check-unsafe.mjs && node tools/ship/golden-stamp.mjs --check && XEET_REQUIRE_WASM=1 node --test packages/xeet/test/xeet.test.js packages/xeet/test/fonts.test.js packages/xeet/test/resolve-host.test.js",
+    "test": "node tools/ship/check-contract.mjs && node tools/ship/check-unsafe.mjs && node tools/ship/golden-stamp.mjs --check && node --test tools/ship/npm-gate.test.mjs && XEET_REQUIRE_WASM=1 node --test packages/xeet/test/xeet.test.js packages/xeet/test/fonts.test.js packages/xeet/test/resolve-host.test.js",
     "canary": "node tools/ship/upstream-canary.mjs",
     "playground": "node tools/playground/server.mjs"
   },

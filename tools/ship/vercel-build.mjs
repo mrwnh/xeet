@@ -249,6 +249,8 @@ if (runs("gates")) {
     execFileSync("node", ["tools/ship/check-contract.mjs"], { cwd: ROOT, stdio: "inherit", env });
     execFileSync("node", ["tools/ship/check-unsafe.mjs"], { cwd: ROOT, stdio: "inherit", env });
     execFileSync("node", ["tools/ship/golden-stamp.mjs", "--check"], { cwd: ROOT, stdio: "inherit", env });
+    // The gate `release.yml` publishes through; a release is the only other place it runs.
+    execFileSync("node", ["--test", "tools/ship/npm-gate.test.mjs"], { cwd: ROOT, stdio: "inherit", env });
     const actionlint = ensureActionlint(env);
     if (actionlint) {
       execFileSync(actionlint, ["-color"], { cwd: ROOT, stdio: "inherit", env });

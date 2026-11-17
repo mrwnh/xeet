@@ -3,8 +3,8 @@
 # Security model (adapted from rauchg/typing-stats + npm OIDC Trusted Publishing):
 #   - Triggered ONLY on `v*` tag pushes — never on PRs or arbitrary branch dispatches.
 #   - Top-level `permissions: {}`; write/OIDC/attestation permissions exist ONLY on
-#     the `publish` job behind the protected `release` GitHub Environment (`v*` tag
-#     deployment policy).
+#     the `stage` and `promote` jobs behind the protected `release` GitHub
+#     Environment (`v*` tag deployment policy).
 #   - 100% first-party `actions/*` pinned to full 40-char commit SHAs (enforced at
 #     the repo level via `sha_pinning_required: true`), `persist-credentials: false`
 #     on every checkout, zero build/package caches, and zero `${{ }}` inside `run:`.
@@ -17,6 +17,21 @@
 #     SHA-256 PNG for an ASCII + Emoji + CJK + Math test post before publishing.
 #   - Authenticates to npm exclusively via GitHub OIDC Trusted Publishing (Node 24 /
 #     npm >= 11.5.1) — zero long-lived `NPM_TOKEN` secrets stored in GitHub.
+#
+# A release is all or nothing (`tools/ship/npm-release.mjs`):
+#   - npm scans an upload before it serves it, so `npm publish` returning success
+#     does not mean the version can be installed. The scan usually takes minutes;
+#     it has held `@xeet/cli-linux-x64` for a day, which left `@xeet/cli` 0.1.1 and
+#     0.1.2 live with no Linux x64 binary behind them.
+#   - `stage` attests the tarballs, creates the GitHub Release as a draft and
+#     publishes only the six `@xeet/cli-<platform>` packages, which nothing
+#     installs directly.
+#   - `promote` waits until the registry serves all six with the bytes built here,
+#     and only then publishes `@xeet/core` and `@xeet/cli`, installs the release
+#     from npm, and publishes the GitHub Release.
+#   - When npm holds a package past the wait, `promote` fails with nothing
+#     user-facing published. Re-run that job once npm serves the package; every
+#     step skips what is already done.
 name: release
 
 on:
@@ -104,6 +119,7 @@ jobs:
           node tools/ship/check-contract.mjs
           node tools/ship/check-unsafe.mjs
           node tools/ship/golden-stamp.mjs --check
+          node --test tools/ship/npm-gate.test.mjs
 
   build:
     name: Build (${{ matrix.platform }})
@@ -288,14 +304,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish:
-    name: Attest, release & publish via OIDC
+  stage:
+    name: Attest, stage & publish platform binaries via OIDC
     needs: [verify, build, wasm]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: release
     permissions:
-      contents: write # Create GitHub Release and upload verified tarballs + SHA256SUMS.txt
+      contents: write # Create the draft GitHub Release and upload verified tarballs + SHA256SUMS.txt
       id-token: write # Mint OIDC token for npm Trusted Publishing and Sigstore signing
       attestations: write # Record GitHub Artifact Attestations for release tarballs
     steps:
@@ -392,7 +408,9 @@ jobs:
         with:
           subject-path: "dist/release/*.tgz"
 
-      - name: Create GitHub Release and upload tarballs + SHA256SUMS.txt
+      # A draft: the release is not announced, and is not `latest`, until `promote`
+      # has seen npm serve every package.
+      - name: Create the draft GitHub Release and upload tarballs + SHA256SUMS.txt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
@@ -401,32 +419,134 @@ jobs:
             gh release upload "$TAG" dist/release/*.tgz dist/release/SHA256SUMS.txt --clobber
           else
             gh release create "$TAG" dist/release/*.tgz dist/release/SHA256SUMS.txt \
+              --draft \
               --verify-tag \
               --title "$TAG" \
               --generate-notes
           fi
 
-      - name: Publish verified tarballs to npm via OIDC Trusted Publishing
+      # Only the platform packages. `@xeet/cli` pins each of them by exact version
+      # and `@xeet/core` ships with it, so both wait for `promote`.
+      - name: Publish the platform binaries to npm via OIDC Trusted Publishing
         env:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
-          PACKAGES=(
-            "@xeet/core:dist/release/xeet-core-${VERSION}.tgz"
-            "@xeet/cli-darwin-arm64:dist/release/xeet-cli-darwin-arm64-${VERSION}.tgz"
-            "@xeet/cli-darwin-x64:dist/release/xeet-cli-darwin-x64-${VERSION}.tgz"
-            "@xeet/cli-linux-arm64:dist/release/xeet-cli-linux-arm64-${VERSION}.tgz"
-            "@xeet/cli-linux-x64:dist/release/xeet-cli-linux-x64-${VERSION}.tgz"
-            "@xeet/cli-win32-arm64:dist/release/xeet-cli-win32-arm64-${VERSION}.tgz"
-            "@xeet/cli-win32-x64:dist/release/xeet-cli-win32-x64-${VERSION}.tgz"
-            "@xeet/cli:dist/release/xeet-cli-${VERSION}.tgz"
-          )
-          for entry in "${PACKAGES[@]}"; do
-            pkg="${entry%%:*}"
-            tgz="${entry#*:}"
-            if npm view "${pkg}@${VERSION}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
-              echo "Skipping ${pkg}@${VERSION} (already published)"
-              continue
+          node tools/ship/npm-release.mjs publish \
+            "dist/release/xeet-cli-darwin-arm64-${VERSION}.tgz" \
+            "dist/release/xeet-cli-darwin-x64-${VERSION}.tgz" \
+            "dist/release/xeet-cli-linux-arm64-${VERSION}.tgz" \
+            "dist/release/xeet-cli-linux-x64-${VERSION}.tgz" \
+            "dist/release/xeet-cli-win32-arm64-${VERSION}.tgz" \
+            "dist/release/xeet-cli-win32-x64-${VERSION}.tgz"
+
+      # `promote` publishes these exact files. Kept for two weeks because npm has
+      # held a package for a day, and `promote` is re-run after that.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-tarballs
+          path: dist/release
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+
+  promote:
+    name: Promote once npm serves every platform binary
+    needs: [verify, stage]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    environment: release
+    permissions:
+      contents: write # Publish the draft GitHub Release
+      id-token: write # Mint OIDC token for npm Trusted Publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-tarballs
+          path: dist/release
+
+      - name: Verify the staged tarballs against SHA256SUMS.txt
+        run: |
+          ( cd dist/release && sha256sum --check --strict SHA256SUMS.txt )
+
+      # The gate. Up to 30 minutes; npm's scan is typically five. If it runs out,
+      # the job fails here and nothing below has happened.
+      - name: Wait until npm serves every platform binary
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          node tools/ship/npm-release.mjs wait --timeout 1800 --interval 30 \
+            "dist/release/xeet-cli-darwin-arm64-${VERSION}.tgz" \
+            "dist/release/xeet-cli-darwin-x64-${VERSION}.tgz" \
+            "dist/release/xeet-cli-linux-arm64-${VERSION}.tgz" \
+            "dist/release/xeet-cli-linux-x64-${VERSION}.tgz" \
+            "dist/release/xeet-cli-win32-arm64-${VERSION}.tgz" \
+            "dist/release/xeet-cli-win32-x64-${VERSION}.tgz"
+
+      - name: Publish @xeet/core and @xeet/cli to npm via OIDC Trusted Publishing
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          node tools/ship/npm-release.mjs publish \
+            "dist/release/xeet-core-${VERSION}.tgz" \
+            "dist/release/xeet-cli-${VERSION}.tgz"
+
+      - name: Wait until npm serves both as latest
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          node tools/ship/npm-release.mjs wait --timeout 1500 --interval 30 --require-latest \
+            "dist/release/xeet-core-${VERSION}.tgz" \
+            "dist/release/xeet-cli-${VERSION}.tgz"
+
+      # What a user gets: no version given, from the registry, on Linux x64 (the
+      # platform whose binary was missing from 0.1.1 and 0.1.2).
+      - name: Install the release from npm and render with it
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          SMOKE_DIR=$(mktemp -d)
+          cd "$SMOKE_DIR"
+          echo '{"private":true}' > package.json
+          installed=false
+          for attempt in 1 2 3 4 5; do
+            if npm install --no-audit --no-fund @xeet/cli @xeet/core; then
+              installed=true
+              break
             fi
-            echo "Publishing ${pkg}@${VERSION} from ${tgz}…"
-            npm publish "$tgz" --access public --registry https://registry.npmjs.org
+            echo "install attempt ${attempt} failed; the registry may still be catching up"
+            sleep 20
           done
+          if [ "$installed" != "true" ]; then
+            echo "::error::npm install @xeet/cli @xeet/core failed after npm reported both as served"
+            exit 1
+          fi
+          for pkg in cli core cli-linux-x64; do
+            manifest="node_modules/@xeet/${pkg}/package.json"
+            if [ ! -f "$manifest" ]; then
+              echo "::error::npm did not install @xeet/${pkg}"
+              exit 1
+            fi
+            got=$(node -p "require('./${manifest}').version")
+            if [ "$got" != "$VERSION" ]; then
+              echo "::error::npm installed @xeet/${pkg}@${got}, expected ${VERSION}"
+              exit 1
+            fi
+          done
+          echo '{"text":"release smoke 🚀 日本語 𝗯𝗼𝗹𝗱"}' | ./node_modules/.bin/xeet render - -o out.png
+          test -s out.png
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release edit "$TAG" --draft=false

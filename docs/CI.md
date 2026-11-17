@@ -23,8 +23,8 @@ why they skipped instead of failing.
 
 | Pipeline | When | Does | Time |
 |---|---|---|---|
-| Vercel CI (`turbo.json`) | push to `main` | `ci:gates` (contract, `#![forbid(unsafe_code)]`, golden stamps, `actionlint`), `ci:rust-test` on 8 vCPU Ubuntu (fmt, clippy, workspace tests, stored Chrome layout & raster parity), `ci:wasm` + `ci:pkg-test` | ~1–2 minutes |
-| `release.yml` | `v*` tag on `main` | ancestry & version verification, 6-platform self-contained Rust binaries, WASM build, 6-way cross-OS + WASM PNG determinism check, GitHub Artifact Attestations, GitHub Release, npm OIDC Trusted Publishing | ~5 minutes |
+| Vercel CI (`turbo.json`) | push to `main` | `ci:gates` (contract, `#![forbid(unsafe_code)]`, golden stamps, release-gate tests, `actionlint`), `ci:rust-test` on 8 vCPU Ubuntu (fmt, clippy, workspace tests, stored Chrome layout & raster parity), `ci:wasm` + `ci:pkg-test` | ~1–2 minutes |
+| `release.yml` | `v*` tag on `main` | ancestry & version verification, 6-platform self-contained Rust binaries, WASM build, 6-way cross-OS + WASM PNG determinism check, GitHub Artifact Attestations, draft GitHub Release, npm OIDC Trusted Publishing in two phases (below), install-from-npm check, GitHub Release published | ~15 minutes when npm's scan is quick |
 | `upstream-watch.yml` (pipeline 2) | every 6h (`17 */6 * * *`) | logged-out probe of live x.com stylesheet & SSR invariants; opens deduplicated alarm issue or dispatches `sync.yml` | seconds |
 | `sync.yml` (pipeline 3) | from watch, or by hand | snapshot to the private store, regenerate tokens, fingerprint, gates, then **either** a signed token-port PR **or** a repair-brief issue | 10–20 minutes |
 
@@ -32,6 +32,36 @@ Pipeline 3 is a skeleton with real seams: the oracle re-capture step runs the
 replica harness (`tools/oracle/replica*.mjs`) and the behavior canary. The two
 outcomes at the end are implemented; the policy decisions that are still manual
 are called out in `sync.yml`.
+
+### A release is all or nothing
+
+npm scans an upload before it serves it, so `npm publish` returning success
+does not mean the version can be installed. The scan usually takes minutes; it
+held `@xeet/cli-linux-x64` for about a day on each of 0.1.0, 0.1.1 and 0.1.2. `@xeet/cli`
+pins each platform package by exact version, and the workflow used to publish
+it straight after them, so 0.1.1 and 0.1.2 were live with no Linux x64 binary
+to install.
+
+`release.yml` now publishes in two phases, with
+[`tools/ship/npm-release.mjs`](../tools/ship/npm-release.mjs) as the gate
+between them:
+
+1. **`stage`** attests the tarballs, creates the GitHub Release as a draft, and
+   publishes the six `@xeet/cli-<platform>` packages. Nothing installs those
+   directly.
+2. **`promote`** waits (up to 30 minutes) until the registry serves all six
+   with the bytes built in that run. Only then does it publish `@xeet/core` and
+   `@xeet/cli`, wait for both to be `latest`, install the release from npm on
+   Linux x64 and render with it, and publish the GitHub Release.
+
+If npm holds a package past the wait, `promote` fails and nothing user-facing
+has been published: `latest` still resolves to the previous complete release,
+and the GitHub Release is still a draft. Re-run the failed job once npm serves
+the package (it sends an email when a publish is delayed). Every step skips
+what is already done, and the staged tarballs are kept for 14 days.
+
+`@xeet/core` and `@xeet/cli` are two uploads, each scanned by npm, so they
+become installable minutes apart rather than at one instant.
 
 ### Why the PR pipeline is hermetic
 
